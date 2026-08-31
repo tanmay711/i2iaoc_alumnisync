@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AlumniSync — Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ====================================================================
+       SIDEBAR
+  ===================================================================== -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-icon">🎓</span>
+      <span class="logo-text">AlumniSync</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-section="alumni">
+        <span class="nav-icon">👥</span> Alumni List
+      </a>
+      <a href="#" class="nav-item" data-section="add">
+        <span class="nav-icon">➕</span> Add Alumni
+      </a>
+      <a href="#" class="nav-item" data-section="import">
+        <span class="nav-icon">📁</span> Import CSV
+      </a>
+      <a href="#" class="nav-item" data-section="analytics">
+        <span class="nav-icon">📊</span> Analytics
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="api-dot" class="api-dot dot-checking"></div>
+      <span id="api-label">Connecting…</span>
+    </div>
+  </aside>
+
+  <!-- ====================================================================
+       MAIN CONTENT
+  ===================================================================== -->
+  <main class="main">
+
+    <!-- ----------------------------------------------------------------
+         SECTION: Alumni List
+    ----------------------------------------------------------------- -->
+    <section id="section-alumni" class="section active">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">Alumni</h1>
+          <p class="section-sub">All extracted and verified alumni records</p>
+        </div>
+        <div class="header-actions">
+          <div class="search-wrap">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="search-input" placeholder="Search name, college, company…" />
+          </div>
+          <button class="btn btn-outline" id="btn-export">⬇ Export CSV</button>
+          <button class="btn btn-primary" id="btn-refresh">↻ Refresh</button>
+        </div>
+      </div>
+
+      <!-- Stats row -->
+      <div class="stats-row" id="stats-row">
+        <div class="stat-card">
+          <span class="stat-num" id="stat-total">—</span>
+          <span class="stat-label">Total Alumni</span>
+        </div>
+        <div class="stat-card stat-green">
+          <span class="stat-num" id="stat-verified">—</span>
+          <span class="stat-label">Verified</span>
+        </div>
+        <div class="stat-card stat-amber">
+          <span class="stat-num" id="stat-review">—</span>
+          <span class="stat-label">Needs Review</span>
+        </div>
+        <div class="stat-card stat-blue">
+          <span class="stat-num" id="stat-companies">—</span>
+          <span class="stat-label">Unique Companies</span>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="table-wrap">
+        <table class="alumni-table" id="alumni-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>College</th>
+              <th>Field</th>
+              <th>Grad Year</th>
+              <th>Company</th>
+              <th>Title</th>
+              <th>Location</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="alumni-tbody">
+            <tr><td colspan="10" class="empty-msg">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination -->
+      <div class="pagination" id="pagination">
+        <button class="btn btn-sm btn-secondary" id="btn-prev" disabled>← Prev</button>
+        <span id="page-info">Page 1</span>
+        <button class="btn btn-sm btn-secondary" id="btn-next">Next →</button>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------------
+         SECTION: Add Alumni
+    ----------------------------------------------------------------- -->
+    <section id="section-add" class="section">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">Add Alumni</h1>
+          <p class="section-sub">Manually enter an alumni record</p>
+        </div>
+      </div>
+
+      <div class="form-card">
+        <form id="add-form">
+          <div class="form-grid">
+
+            <div class="form-group full">
+              <label>Full Name *</label>
+              <input type="text" name="full_name" required placeholder="Rahul Patil" />
+            </div>
+
+            <div class="form-group">
+              <label>College</label>
+              <input type="text" name="college" placeholder="VIT Pune" />
+            </div>
+
+            <div class="form-group">
+              <label>Field of Study</label>
+              <input type="text" name="field_of_study" placeholder="Computer Engineering" />
+            </div>
+
+            <div class="form-group">
+              <label>Degree</label>
+              <input type="text" name="degree" placeholder="B.Tech" />
+            </div>
+
+            <div class="form-group">
+              <label>Start Year</label>
+              <input type="number" name="start_year" placeholder="2021" min="1950" max="2100" />
+            </div>
+
+            <div class="form-group">
+              <label>Graduation Year</label>
+              <input type="number" name="end_year" placeholder="2025" min="1950" max="2100" />
+            </div>
+
+            <div class="form-group">
+              <label>Current Company</label>
+              <input type="text" name="current_company" placeholder="Google" />
+            </div>
+
+            <div class="form-group">
+              <label>Current Title</label>
+              <input type="text" name="current_title" placeholder="Software Engineer" />
+            </div>
+
+            <div class="form-group">
+              <label>Industry</label>
+              <input type="text" name="current_industry" placeholder="Technology" />
+            </div>
+
+            <div class="form-group">
+              <label>Location</label>
+              <input type="text" name="location" placeholder="Bangalore" />
+            </div>
+
+            <div class="form-group full">
+              <label>LinkedIn Profile URL</label>
+              <input type="url" name="profile_url" placeholder="https://linkedin.com/in/username" />
+            </div>
+
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" name="currently_studying" />
+                Currently Studying
+              </label>
+            </div>
+
+          </div>
+
+          <div id="add-result" class="alert hidden"></div>
+
+          <div class="form-actions">
+            <button type="reset" class="btn btn-secondary">Clear</button>
+            <button type="submit" class="btn btn-primary">Save Alumni</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------------
+         SECTION: Import CSV
+    ----------------------------------------------------------------- -->
+    <section id="section-import" class="section">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">Import CSV</h1>
+          <p class="section-sub">Bulk import alumni from a CSV file</p>
+        </div>
+      </div>
+
+      <div class="form-card">
+        <div class="upload-zone" id="upload-zone">
+          <div class="upload-icon">📂</div>
+          <p class="upload-title">Drop your CSV file here</p>
+          <p class="upload-sub">or click to browse</p>
+          <input type="file" id="csv-file-input" accept=".csv" />
+        </div>
+
+        <div class="csv-info" id="csv-info"></div>
+
+        <div class="csv-template">
+          <p class="template-title">📋 Expected CSV columns:</p>
+          <code>full_name, college, field_of_study, degree, start_year, end_year, current_company, current_title, location, profile_url, currently_studying</code>
+          <a href="#" id="btn-download-template" class="template-link">Download Template</a>
+        </div>
+
+        <div id="import-result" class="hidden">
+          <div class="import-summary" id="import-summary"></div>
+          <div class="import-details" id="import-details"></div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" id="btn-import" disabled>⬆ Upload & Import</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------------
+         SECTION: Analytics
+    ----------------------------------------------------------------- -->
+    <section id="section-analytics" class="section">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">Analytics</h1>
+          <p class="section-sub">Overview of the alumni database</p>
+        </div>
+        <button class="btn btn-secondary" id="btn-analytics-refresh">↻ Refresh</button>
+      </div>
+
+      <div class="analytics-grid" id="analytics-grid">
+        <div class="chart-card">
+          <h3>Top Colleges</h3>
+          <div id="chart-colleges" class="bar-chart"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Top Companies</h3>
+          <div id="chart-companies" class="bar-chart"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Graduation Years</h3>
+          <div id="chart-years" class="bar-chart"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Top Locations</h3>
+          <div id="chart-locations" class="bar-chart"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ====================================================================
+       DELETE CONFIRM MODAL
+  ===================================================================== -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Delete Alumni</h3>
+      <p id="modal-msg">Are you sure?</p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+        <button class="btn btn-danger" id="modal-confirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
