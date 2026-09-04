@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AlumniSync</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <img src="icons/icon48.png" alt="AlumniSync" class="logo" />
+    <div class="header-text">
+      <span class="app-name">AlumniSync</span>
+      <span id="api-status" class="api-badge api-checking">Connecting…</span>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main id="main">
+
+    <!-- State: not on LinkedIn profile -->
+    <div id="state-not-linkedin" class="state hidden">
+      <div class="state-icon">🔗</div>
+      <p class="state-title">Open a LinkedIn profile</p>
+      <p class="state-desc">Navigate to any LinkedIn member profile page, then click <strong>Sync This Profile</strong>.</p>
+    </div>
+
+    <!-- State: ready to sync -->
+    <div id="state-ready" class="state hidden">
+      <div class="profile-card">
+        <div class="profile-avatar" id="profile-initials">--</div>
+        <div class="profile-info">
+          <p class="profile-name" id="profile-name">Loading…</p>
+          <p class="profile-sub" id="profile-sub">—</p>
+        </div>
+      </div>
+
+      <div class="meta-row">
+        <span class="meta-label">🎓</span>
+        <span class="meta-value" id="profile-college">—</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">📅</span>
+        <span class="meta-value" id="profile-years">—</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">📍</span>
+        <span class="meta-value" id="profile-location">—</span>
+      </div>
+
+      <button id="btn-sync" class="btn btn-primary">
+        <span class="btn-icon">⚡</span> Sync This Profile
+      </button>
+    </div>
+
+    <!-- State: syncing -->
+    <div id="state-syncing" class="state hidden">
+      <div class="spinner"></div>
+      <p class="state-title">Syncing profile…</p>
+    </div>
+
+    <!-- State: result -->
+    <div id="state-result" class="state hidden">
+      <div id="result-icon" class="result-icon"></div>
+      <p id="result-title" class="state-title"></p>
+      <p id="result-desc" class="state-desc"></p>
+
+      <div class="btn-row">
+        <button id="btn-sync-another" class="btn btn-secondary">Sync Another</button>
+        <a id="btn-dashboard" href="http://localhost:8000/dashboard" target="_blank" class="btn btn-outline">Dashboard ↗</a>
+      </div>
+    </div>
+
+    <!-- State: error -->
+    <div id="state-error" class="state hidden">
+      <div class="result-icon">❌</div>
+      <p class="state-title" id="error-title">Something went wrong</p>
+      <p id="error-desc" class="state-desc" style="white-space:pre-line;"></p>
+      <p class="state-hint" id="error-hint">If you see a connection error, make sure the backend is running:<br/><code>uvicorn backend.main:app --reload</code></p>
+      <button id="btn-retry" class="btn btn-secondary">Retry</button>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <a href="http://localhost:8000/docs" target="_blank">API Docs</a>
+    &nbsp;·&nbsp;
+    <a href="http://localhost:8000/dashboard" target="_blank">Dashboard</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
