@@ -1,23 +1,302 @@
 /**
- * AlumniSync — Content Script (v4 — LinkedIn 2025)
+ * AlumniSync — Content Script (v6 — LinkedIn 2025)
  *
- * LinkedIn unmounts DOM nodes for sections you scroll past (React virtualization).
- * So DOM scraping fails at the bottom of the page.
+ * APPROACH: Parse document.body.innerText (the visible page text).
  *
- * Primary strategy: LinkedIn always injects JSON-LD structured data in <head>
- * which contains name, college, company, and job title — regardless of scroll.
+ * LinkedIn's DOM is unstable (React virtualization, changing class names,
+ * no stable IDs on logged-in views). But the VISIBLE TEXT always follows
+ * a predictable structure:
  *
- * Secondary: DOM text from sections still in the DOM (top of page).
+ *   Name
+ *   Headline
+ *   Location · Contact info
+ *   ...
+ *   Education
+ *     School Name
+ *     Degree, Field
+ *     Date range
+ *   ...
+ *   Experience
+ *     Job Title
+ *     Company
+ *     Date range
+ *
+ * We scroll incrementally to force all sections into the DOM, then parse
+ * the full page text to extract data from the correct sections.
  */
 
 (function () {
   "use strict";
 
-  // -------------------------------------------------------------------------
-  // STRATEGY 1: JSON-LD structured data
-  // LinkedIn includes <script type="application/ld+json"> in <head>.
-  // This is ALWAYS present and never affected by virtualization.
-  // -------------------------------------------------------------------------
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // =========================================================================
+  // NAME — from <h1> (always at top, never virtualized)
+  // =========================================================================
+
+  function extractName() {
+    const h1 = document.querySelector("h1");
+    if (h1 && h1.innerText.trim().length > 1) return h1.innerText.trim();
+
+    const og = document.querySelector('meta[property="og:title"]');
+    if (og) {
+      const n = og.getAttribute("content").split(/[|\u2013\u2014]/)[0].trim();
+      if (n.length > 1 && !/linkedin/i.test(n)) return n;
+    }
+
+    const t = document.title.replace(/^\(\d+\)\s*/, "").split(/[|\u2013\u2014]/)[0].trim();
+    if (t.length > 1 && !/linkedin/i.test(t)) return t;
+
+    return null;
+  }
+
+  // =========================================================================
+  // SCROLL THROUGH PAGE — forces LinkedIn to render all sections
+  // =========================================================================
+
+  async function scrollFullPage() {
+    // LinkedIn may use a custom scroll container instead of window
+    const scrollContainer =
+      document.querySelector(".scaffold-layout__main") ||
+      document.querySelector("main") ||
+      document.scrollingElement ||
+      document.documentElement;
+
+    const savedY = scrollContainer.scrollTop || window.scrollY;
+    const totalHeight = scrollContainer.scrollHeight || document.documentElement.scrollHeight;
+    const viewHeight = window.innerHeight;
+    const step = Math.floor(viewHeight * 0.6);
+
+    // Scroll down in steps to force LinkedIn to render each section
+    for (let y = 0; y < totalHeight; y += step) {
+      scrollContainer.scrollTop = y;
+      window.scrollTo({ top: y, behavior: "instant" });
+      await sleep(300); // give React time to render
+    }
+
+    // Scroll to very bottom
+    scrollContainer.scrollTop = totalHeight;
+    window.scrollTo({ top: totalHeight, behavior: "instant" });
+    await sleep(400);
+
+    // Now scroll back up in steps (so sections near top render again)
+    for (let y = totalHeight; y >= 0; y -= step) {
+      scrollContainer.scrollTop = y;
+      window.scrollTo({ top: y, behavior: "instant" });
+      await sleep(200);
+    }
+
+    // Restore original position
+    scrollContainer.scrollTop = savedY;
+    window.scrollTo({ top: savedY, behavior: "instant" });
+    await sleep(100);
+  }
+
+  // =========================================================================
+  // TEXT-BASED SECTION PARSER
+  // Splits the full page text into sections by known headings
+  // =========================================================================
+
+  function getPageSections() {
+    const fullText = (document.querySelector("main") || document.body).innerText;
+    const allLines = fullText.split("\n").map((l) => l.trim()).filter(Boolean);
+
+    // Known LinkedIn section headings
+    const sectionHeadings = [
+      "about", "experience", "education", "licenses & certifications",
+      "skills", "recommendations", "courses", "projects", "publications",
+      "honors & awards", "languages", "interests", "volunteer experience",
+      "organizations", "test scores", "patents", "featured",
+    ];
+
+    const sections = {};
+    let currentSection = "__top__";
+    sections[currentSection] = [];
+
+    for (const line of allLines) {
+      const lower = line.toLowerCase();
+      // Check if this line is a section heading
+      // LinkedIn headings are standalone lines matching exactly
+      // Some have counts like "Skills (12)" or "Licenses & certifications (23)"
+      const cleanLower = lower.replace(/\s*\(\d+\)\s*$/, "").trim();
+
+      if (sectionHeadings.includes(cleanLower)) {
+        currentSection = cleanLower;
+        sections[currentSection] = [];
+      } else {
+        if (!sections[currentSection]) sections[currentSection] = [];
+        sections[currentSection].push(line);
+      }
+    }
+
+    return sections;
+  }
+
+  // =========================================================================
+  // PARSE EDUCATION from section text lines
+  // =========================================================================
+
+  function parseEducation(lines) {
+    if (!lines || lines.length === 0) return null;
+
+    // Filter out noise lines (buttons, links, icons, etc.)
+    const clean = lines.filter((l) =>
+      l.length > 1 &&
+      l.length < 300 &&
+      !/^(show all|see more|see less|show \d|logo|·)$/i.test(l)
+    );
+
+    if (clean.length === 0) return null;
+
+    // The first education entry starts at line 0
+    // Structure: School Name → Degree, Field → Date range → (optional extras)
+
+    const college = clean[0] || null;
+    let degree = null;
+    let field_of_study = null;
+    let start_year = null;
+    let end_year = null;
+    let currently_studying = false;
+    let dateFound = false;
+
+    for (let i = 1; i < Math.min(clean.length, 8); i++) {
+      const t = clean[i];
+
+      // Skip noise
+      if (/^(activities|grade|description|skills)/i.test(t)) break;
+
+      // Date line: contains year numbers
+      if (/\b(19|20)\d{2}\b/.test(t) || /present|current/i.test(t)) {
+        const yrs = (t.match(/\b(19|20)\d{2}\b/g) || []).map(Number);
+        start_year = yrs[0] || null;
+        end_year = yrs[1] || null;
+        currently_studying = /present|current/i.test(t) && !end_year;
+        dateFound = true;
+        break; // Stop after date — rest is description
+      }
+
+      // If another school name appears (next education entry), stop
+      // Heuristic: if this line is longer than 15 chars, has no comma, and no digits — might be next school
+      // But first non-date line is likely degree/field
+      if (!degree) {
+        const parts = t.split(",").map((p) => p.trim());
+        degree = parts[0] || null;
+        field_of_study = parts.slice(1).join(", ") || null;
+      }
+    }
+
+    return { college, degree, field_of_study, start_year, end_year, currently_studying };
+  }
+
+  // =========================================================================
+  // PARSE EXPERIENCE from section text lines
+  // =========================================================================
+
+  function parseExperience(lines) {
+    if (!lines || lines.length === 0) {
+      return { current_title: null, current_company: null, past_titles: null, past_companies: null };
+    }
+
+    const clean = lines.filter((l) =>
+      l.length > 1 &&
+      l.length < 300 &&
+      !/^(show all|see more|see less|show \d|logo|·)$/i.test(l)
+    );
+
+    if (clean.length === 0) {
+      return { current_title: null, current_company: null, past_titles: null, past_companies: null };
+    }
+
+    // First experience entry: Title → Company → (type) → Date → (Location)
+    const current_title = clean[0] || null;
+    let current_company = null;
+    const past_titles = [];
+    const past_companies = [];
+
+    // Find company name (first line after title that's not a date or employment type)
+    for (let i = 1; i < Math.min(clean.length, 6); i++) {
+      const t = clean[i];
+      // Skip employment types
+      if (/^(full.time|part.time|contract|freelance|self.employed|internship|seasonal|apprenticeship)/i.test(t)) continue;
+      // Skip date lines
+      if (/\b(19|20)\d{2}\b/.test(t) || /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(t)) break;
+      // Skip location-like lines
+      if (/\b(remote|hybrid|on.?site)\b/i.test(t)) continue;
+
+      current_company = t;
+      break;
+    }
+
+    return {
+      current_title,
+      current_company,
+      past_titles: past_titles.join(" | ") || null,
+      past_companies: past_companies.join(" | ") || null,
+    };
+  }
+
+  // =========================================================================
+  // PARSE LOCATION from the top section
+  // =========================================================================
+
+  function parseLocation(topLines, knownName) {
+    if (!topLines || topLines.length === 0) return null;
+
+    // Location is typically 2-4 lines below the name
+    // It looks like: "City, State, Country" or "City, Country"
+    // Key patterns:
+    //   - Contains comma
+    //   - Contains geographic terms (India, States, etc.) OR has 2-3 comma-separated short words
+    //   - No year numbers
+    //   - Not a headline/bio text (which would be longer or have job-related words)
+
+    // Find name position
+    let startIdx = 0;
+    if (knownName) {
+      const idx = topLines.findIndex((l) => l.toLowerCase() === knownName.toLowerCase());
+      if (idx >= 0) startIdx = idx + 1;
+    }
+
+    // Search within a narrow window after the name
+    const searchEnd = Math.min(startIdx + 10, topLines.length);
+
+    for (let i = startIdx; i < searchEnd; i++) {
+      const t = topLines[i];
+
+      // Skip very short or very long lines
+      if (t.length < 3 || t.length > 60) continue;
+
+      // Must contain a comma
+      if (!t.includes(",")) continue;
+
+      // Must NOT contain year numbers
+      if (/\d{4}/.test(t)) continue;
+
+      // Geographic validation — the parts should be short (city/state/country names)
+      const parts = t.split(",").map((p) => p.trim());
+      if (parts.length < 2 || parts.length > 4) continue;
+
+      // Each part should be relatively short (< 30 chars) and not contain job keywords
+      const allPartsShort = parts.every((p) => p.length > 0 && p.length < 30);
+      if (!allPartsShort) continue;
+
+      // Exclude if it contains common non-location words
+      if (/\b(founder|ceo|cto|engineer|developer|analyst|manager|intern|student|building|helping|passionate|experience|data|software|product|design|AI|tech|startup|company|university|institute|iit|nit|bits|college|school)\b/i.test(t)) {
+        continue;
+      }
+
+      // Positive match: looks like a geographic location
+      return t;
+    }
+
+    return null;
+  }
+
+  // =========================================================================
+  // JSON-LD EXTRACTION (supplemental — works on public views)
+  // =========================================================================
 
   function extractFromJsonLd() {
     const scripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -25,8 +304,6 @@
     for (const script of scripts) {
       try {
         const data = JSON.parse(script.textContent);
-
-        // LinkedIn wraps profile data in a ProfilePage entity
         const entity =
           data["@type"] === "ProfilePage" && data.mainEntity
             ? data.mainEntity
@@ -36,459 +313,140 @@
 
         if (!entity || entity["@type"] !== "Person") continue;
 
-        // College: alumniOf → most recent (last) entry
         const alumniOf = entity.alumniOf;
         const college = Array.isArray(alumniOf)
           ? alumniOf[alumniOf.length - 1]?.name || null
           : alumniOf?.name || null;
 
-        // Company: worksFor → first entry
         const worksFor = entity.worksFor;
         const current_company = Array.isArray(worksFor)
           ? worksFor[0]?.name || null
           : worksFor?.name || null;
 
-        // Title: jobTitle can be a string or array
         const jobTitle = entity.jobTitle;
         const current_title = Array.isArray(jobTitle)
           ? jobTitle.filter(Boolean)[0] || null
           : jobTitle || null;
 
-        return {
-          full_name: entity.name || null,
-          bio: entity.description || null,
-          college,
-          current_company,
-          current_title,
-        };
+        return { full_name: entity.name || null, college, current_company, current_title };
       } catch (_) {}
     }
 
     return null;
   }
 
-  // -------------------------------------------------------------------------
-  // STRATEGY 2: Meta tags (supplemental)
-  // -------------------------------------------------------------------------
+  // =========================================================================
+  // MAIN EXTRACTION — scroll + parse text
+  // =========================================================================
 
-  function extractFromMeta() {
-    function meta(name) {
-      const el =
-        document.querySelector(`meta[property="${name}"]`) ||
-        document.querySelector(`meta[name="${name}"]`);
-      return el ? (el.getAttribute("content") || "").trim() : null;
-    }
-
-    // og:title → "Name | LinkedIn" → extract name
-    const ogTitle = meta("og:title");
-    let full_name = null;
-    if (ogTitle) {
-      const n = ogTitle.split(/[|\u2013\u2014\-]/)[0].trim();
-      if (n.length > 1 && !/linkedin/i.test(n)) full_name = n;
-    }
-
-    return { full_name };
-  }
-
-  // -------------------------------------------------------------------------
-  // STRATEGY 3: DOM extraction (works when sections ARE in the DOM)
-  // -------------------------------------------------------------------------
-
-  /** Extract text from visible elements only (aria-hidden="true" = visible in LinkedIn) */
-  function visibleTexts(container) {
-    if (!container) return [];
-    // LinkedIn marks its visible text with aria-hidden="true" (to avoid SR duplication)
-    const spans = Array.from(container.querySelectorAll('[aria-hidden="true"]'));
-    const seen = new Set();
-    return spans
-      .map((el) => el.innerText.trim())
-      .filter((t) => t && !seen.has(t) && seen.add(t));
-  }
-
-  /** Parse a string for 4-digit year pairs */
-  function parseYears(str) {
-    if (!str) return { start_year: null, end_year: null };
-    const yrs = (str.match(/\b(19|20)\d{2}\b/g) || []).map(Number);
-    return { start_year: yrs[0] || null, end_year: yrs[1] || null };
-  }
-
-  function isPresent(str) {
-    return /present|current|now/i.test(str || "");
-  }
-
-  function cleanText(value) {
-    return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-  }
-
-  function uniqueTexts(values) {
-    const seen = new Set();
-    return values
-      .map(cleanText)
-      .filter((value) => value && !seen.has(value.toLowerCase()) && seen.add(value.toLowerCase()));
-  }
-
-  /** Find a section by id or by searching for an h2 whose text matches */
-  function findSection(id) {
-    // Try direct ID first
-    const byId = document.querySelector(`#${id}`);
-    if (byId) {
-      // If the id element has list items, return it
-      if (byId.querySelectorAll("li").length > 0) return byId;
-      // Otherwise walk up to find the nearest ancestor with list items
-      let node = byId;
-      for (let i = 0; i < 5; i++) {
-        node = node.parentElement;
-        if (!node) break;
-        if (node.querySelectorAll("li").length > 0) return node;
-      }
-    }
-
-    // Fallback: scan all h2 headings
-    for (const h of document.querySelectorAll("h2")) {
-      if (h.innerText.trim().toLowerCase() === id) {
-        let node = h;
-        for (let i = 0; i < 8; i++) {
-          node = node.parentElement;
-          if (!node) break;
-          if (node.querySelectorAll("li").length > 0) return node;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  function extractEducationFromDom() {
-    const section = findSection("education");
-    if (!section) return null;
-
-    const items = section.querySelectorAll("li");
-    if (!items.length) return null;
-
-    const first = items[0];
-    const texts = visibleTexts(first);
-
-    // If no aria-hidden spans, fall back to line-by-line innerText
-    const lines = texts.length
-      ? texts
-      : first.innerText.split("\n").map((l) => l.trim()).filter(Boolean);
-
-    // Deduplicate consecutive identical entries
-    const deduped = lines.filter((l, i) => i === 0 || l !== lines[i - 1]);
-
-    const schoolName = deduped[0] || null;
-    let degree = null;
-    let field_of_study = null;
-    let dateText = null;
-    let currently_studying = false;
-
-    for (let i = 1; i < deduped.length; i++) {
-      const t = deduped[i];
-      if (/\b(19|20)\d{2}\b/.test(t) || isPresent(t)) {
-        dateText = t;
-        const { end_year } = parseYears(t);
-        currently_studying = isPresent(t) && !end_year;
-        break;
-      }
-      if (!degree && t.length < 200) {
-        const parts = t.split(",").map((p) => p.trim());
-        degree = parts[0] || null;
-        field_of_study = parts[1] || null;
-        if (!field_of_study && deduped[i + 1] && !/\b(19|20)\d{2}\b/.test(deduped[i + 1])) {
-          field_of_study = deduped[i + 1];
-        }
-      }
-    }
-
-    const { start_year, end_year } = parseYears(dateText);
-    return { college: schoolName, degree, field_of_study, start_year, end_year, currently_studying };
-  }
-
-  function extractExperienceFromDom() {
-    const section = findSection("experience");
-    if (!section) return null;
-
-    const items = section.querySelectorAll("li");
-    if (!items.length) return null;
-
-    const first = items[0];
-    const texts = visibleTexts(first);
-    const lines = texts.length
-      ? texts
-      : first.innerText.split("\n").map((l) => l.trim()).filter(Boolean);
-    const deduped = lines.filter((l, i) => i === 0 || l !== lines[i - 1]);
-
-    const current_title = deduped[0] || null;
-    const current_company = deduped[1] || null;
-
-    const past_titles = [];
-    const past_companies = [];
-    for (let i = 1; i < items.length; i++) {
-      const t = visibleTexts(items[i]);
-      const d = t.length
-        ? t
-        : items[i].innerText.split("\n").map((l) => l.trim()).filter(Boolean);
-      const dd = d.filter((l, i) => i === 0 || l !== d[i - 1]);
-      if (dd[0]) past_titles.push(dd[0]);
-      if (dd[1]) past_companies.push(dd[1]);
-    }
-
-    return {
-      current_title,
-      current_company,
-      past_titles: uniqueTexts(past_titles),
-      past_companies: uniqueTexts(past_companies),
-    };
-  }
-
-  function extractListSection(sectionName) {
-    const section = findSection(sectionName);
-    let container = section;
-    if (!container) {
-      const heading = Array.from(document.querySelectorAll("h2, h3")).find(
-        (element) => cleanText(element.innerText).toLowerCase() === sectionName
-      );
-      container = heading?.closest("section") || heading?.parentElement;
-    }
-    if (!container) return [];
-
-    const items = container.querySelectorAll("li, [role='listitem'], button, a");
-    const values = Array.from(items).map((item) => {
-      const lines = visibleTexts(item);
-      return lines[0] || cleanText(item.innerText).split("\n")[0];
-    });
-    return uniqueTexts(values);
-  }
-
-  function extractSkills() {
-    return extractListSection("skills");
-  }
-
-  function extractProjects() {
-    return extractListSection("projects");
-  }
-
-  function extractCertifications() {
-    return extractListSection("certifications");
-  }
-
-  function extractBasicInfo() {
-    const profile = extractFromJsonLd() || {};
-
-    if (!profile.full_name) {
-      profile.full_name = extractFromMeta().full_name;
-    }
-    if (!profile.full_name) profile.full_name = extractNameFromDom();
-    if (!profile.full_name) {
-      const title = document.title.replace(/^\(\d+\)\s*/, "").split(/[|\u2013\u2014\-]/)[0].trim();
-      if (title.length > 1 && !/linkedin/i.test(title)) profile.full_name = title;
-    }
-
-    profile.location = extractLocationFromDom() || extractLocationFromPageText(profile.full_name);
-    return profile;
-  }
-
-  function extractLocationFromDom() {
-    // Location appears near the top of the page and is unlikely to be virtualized
-    // Scan the first 60 aria-hidden spans or all spans in the top card
-    const topArea = document.querySelector("main > section, section.artdeco-card");
-    const pool = topArea
-      ? topArea.querySelectorAll('[aria-hidden="true"], span')
-      : document.querySelectorAll('[aria-hidden="true"]');
-
-    for (const el of Array.from(pool).slice(0, 60)) {
-      const text = el.innerText?.trim() || "";
-      if (
-        text.length >= 3 &&
-        text.length <= 80 &&
-        text.includes(",") &&
-        !/\d{4}/.test(text) &&
-        !/http|linkedin|connect|follow|message|degree|bachelor|master|engineer|tech|science|analyst|developer|software|data|product|intern/i.test(text)
-      ) {
-        return text;
-      }
-    }
-    return null;
-  }
-
-  function extractNameFromDom() {
-    const h1 = document.querySelector("h1");
-    if (h1 && h1.innerText.trim().length > 1) return h1.innerText.trim();
-    return null;
-  }
-
-  // -------------------------------------------------------------------------
-  // STRATEGY 4: Page body text parsing (last resort for location)
-  // LinkedIn's top card text (name, headline, location) is always in the DOM.
-  // -------------------------------------------------------------------------
-
-  function extractLocationFromPageText(knownName) {
-    // The top section text order is typically:
-    // Name → Headline → Location
-    // We find the line after the headline that looks like a location
-    const fullText = (document.querySelector("main") || document.body).innerText;
-    const lines = fullText
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 2 && l.length < 80);
-
-    // Find name position in text
-    const nameIdx = lines.findIndex(
-      (l) => knownName && l.toLowerCase() === knownName.toLowerCase()
-    );
-    const searchFrom = nameIdx >= 0 ? nameIdx + 1 : 0;
-    const searchTo = Math.min(searchFrom + 15, lines.length);
-
-    for (let i = searchFrom; i < searchTo; i++) {
-      const t = lines[i];
-      if (
-        t.includes(",") &&
-        !/\d{4}/.test(t) &&
-        !/degree|bachelor|master|engineer|tech|science|http|follow|connect|message|linkedin/i.test(t)
-      ) {
-        return t;
-      }
-    }
-    return null;
-  }
-
-  // -------------------------------------------------------------------------
-  // Main profile extractor — combines all strategies
-  // -------------------------------------------------------------------------
-
-  function extractProfile() {
+  async function extractProfileFull() {
     const profile_url = window.location.href.split("?")[0];
+
+    // Step 1: Get name (always available)
+    const full_name = extractName();
+
+    // Step 2: Scroll through the page to force all sections to render
+    await scrollFullPage();
+
+    // Step 3: Parse the full page text into sections
+    const sections = getPageSections();
+
+    // Step 4: Extract from each section
+    const edu = parseEducation(sections["education"]);
+    const exp = parseExperience(sections["experience"]);
+    const location = parseLocation(sections["__top__"], full_name);
+
+    // Step 5: Get JSON-LD as supplemental data
+    const jsonLd = extractFromJsonLd();
+
+    // Build the result — section-specific data takes priority
     const result = {
+      full_name: full_name || jsonLd?.full_name || null,
       profile_url,
       source: "linkedin-extension",
-      past_companies: [],
-      past_titles: [],
-      skills: [],
-      projects: [],
-      certifications: [],
+
+      // FROM EDUCATION SECTION ONLY
+      college: edu?.college || jsonLd?.college || null,
+      degree: edu?.degree || null,
+      field_of_study: edu?.field_of_study || null,
+      start_year: edu?.start_year || null,
+      end_year: edu?.end_year || null,
+      currently_studying: edu?.currently_studying || false,
+
+      // FROM EXPERIENCE SECTION ONLY
+      current_title: exp?.current_title || jsonLd?.current_title || null,
+      current_company: exp?.current_company || jsonLd?.current_company || null,
+      current_industry: null,
+      past_titles: exp?.past_titles || null,
+      past_companies: exp?.past_companies || null,
+
+      // FROM TOP SECTION ONLY
+      location: location || null,
     };
-    Object.assign(result, extractBasicInfo());
-
-    // Education — try DOM (in DOM when user is near top of profile)
-    const domEdu = extractEducationFromDom();
-    if (domEdu) {
-      // DOM education fills in fields that JSON-LD doesn't provide (years, degree)
-      if (!result.college && domEdu.college) result.college = domEdu.college;
-      if (domEdu.degree) result.degree = domEdu.degree;
-      if (domEdu.field_of_study) result.field_of_study = domEdu.field_of_study;
-      if (domEdu.start_year) result.start_year = domEdu.start_year;
-      if (domEdu.end_year) result.end_year = domEdu.end_year;
-      if (domEdu.currently_studying) result.currently_studying = true;
-    } else {
-      result.currently_studying = false;
-    }
-
-    // Experience — try DOM (fills in what JSON-LD provides + past positions)
-    const domExp = extractExperienceFromDom();
-    if (domExp) {
-      if (!result.current_title && domExp.current_title) result.current_title = domExp.current_title;
-      if (!result.current_company && domExp.current_company) result.current_company = domExp.current_company;
-      if (domExp.past_titles.length) result.past_titles = domExp.past_titles;
-      if (domExp.past_companies.length) result.past_companies = domExp.past_companies;
-    }
-
-    result.skills = extractSkills();
-    result.projects = extractProjects();
-    result.certifications = extractCertifications();
-
-    for (const key of ["full_name", "bio", "location", "college", "degree", "field_of_study", "current_company", "current_title"]) {
-      if (result[key]) result[key] = cleanText(result[key]);
-    }
 
     return result;
   }
 
-  // -------------------------------------------------------------------------
-  // Retry wrapper — retries until we have more than just a name, or give up
-  // -------------------------------------------------------------------------
+  // Quick non-scroll extraction (for warm-up cache)
+  function extractProfileQuick() {
+    const full_name = extractName();
+    const sections = getPageSections();
+    const edu = parseEducation(sections["education"]);
+    const exp = parseExperience(sections["experience"]);
+    const location = parseLocation(sections["__top__"], full_name);
+    const jsonLd = extractFromJsonLd();
 
-  function extractWithRetry(callback, maxRetries, delay) {
-    let attempts = 0;
-
-    function attempt() {
-      attempts++;
-      const profile = extractProfile();
-      const hasExtra =
-        profile.college || profile.location || profile.current_company || profile.current_title;
-
-      if (hasExtra || attempts >= maxRetries) {
-        callback(profile);
-      } else {
-        setTimeout(attempt, delay);
-      }
-    }
-
-    attempt();
+    return {
+      full_name: full_name || jsonLd?.full_name || null,
+      profile_url: window.location.href.split("?")[0],
+      source: "linkedin-extension",
+      college: edu?.college || jsonLd?.college || null,
+      degree: edu?.degree || null,
+      field_of_study: edu?.field_of_study || null,
+      start_year: edu?.start_year || null,
+      end_year: edu?.end_year || null,
+      currently_studying: edu?.currently_studying || false,
+      current_title: exp?.current_title || jsonLd?.current_title || null,
+      current_company: exp?.current_company || jsonLd?.current_company || null,
+      current_industry: null,
+      past_titles: exp?.past_titles || null,
+      past_companies: exp?.past_companies || null,
+      location: location || null,
+    };
   }
 
-  function wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function mergeProfiles(base, next) {
-    for (const [key, value] of Object.entries(next)) {
-      if (["past_companies", "past_titles", "skills", "projects", "certifications"].includes(key)) {
-        base[key] = uniqueTexts([
-          ...(Array.isArray(base[key]) ? base[key] : []),
-          ...(Array.isArray(value) ? value : []),
-        ]);
-        continue;
-      }
-      const hasValue = value !== null && value !== undefined && value !== "";
-      const shouldReplace = base[key] === null || base[key] === undefined || base[key] === "";
-      if (hasValue && (shouldReplace || (key === "currently_studying" && value === true))) {
-        base[key] = value;
-      }
-    }
-    return base;
-  }
-
-  async function extractAcrossProfile() {
-    const originalX = window.scrollX;
-    const originalY = window.scrollY;
-    let merged = extractProfile();
-
-    try {
-      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      for (const fraction of [0.2, 0.4, 0.6, 0.8, 1]) {
-        window.scrollTo(0, maxScroll * fraction);
-        await wait(700);
-        merged = mergeProfiles(merged, extractProfile());
-      }
-    } finally {
-      window.scrollTo(originalX, originalY);
-    }
-
-    return merged;
-  }
-
-  // -------------------------------------------------------------------------
-  // Message listener (popup → content script)
-  // -------------------------------------------------------------------------
+  // =========================================================================
+  // MESSAGE LISTENER
+  // =========================================================================
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "extract_profile") {
-      extractAcrossProfile()
-        .then((profile) => {
-          console.debug("AlumniSync extracted profile", profile);
-          sendResponse({ success: true, profile });
-        })
-        .catch((err) => sendResponse({ success: false, error: err.message }));
+      extractProfileFull()
+        .then((profile) => sendResponse({ success: true, profile }))
+        .catch(() => {
+          // Fallback: quick extraction without scroll
+          try {
+            sendResponse({ success: true, profile: extractProfileQuick() });
+          } catch (_) {
+            sendResponse({
+              success: true,
+              profile: {
+                full_name: extractName(),
+                profile_url: window.location.href.split("?")[0],
+                source: "linkedin-extension",
+              },
+            });
+          }
+        });
     }
     return true;
   });
 
-  // Warm-up cache after 1.5s (gives React time to render initial content)
+  // Warm-up cache
   setTimeout(() => {
     try {
-      const profile = extractProfile();
-      chrome.storage.local.set({ lastProfile: profile, lastProfileUrl: window.location.href });
+      const p = extractProfileQuick();
+      chrome.storage.local.set({ lastProfile: p, lastProfileUrl: window.location.href });
     } catch (_) {}
-  }, 1500);
-
+  }, 2000);
 })();

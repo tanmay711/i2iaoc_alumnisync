@@ -103,9 +103,11 @@ function renderResult(result) {
 
   const CONFIG = {
     created: {
-      icon: "✅",
-      title: "Profile Saved!",
-      desc: `Successfully added to AlumniSync${id}. Check the dashboard to view it.`,
+      icon: result.category === "current_student" ? "🎓" : "✅",
+      title: result.category === "current_student" ? "Saved as Current Student" : "Profile Saved!",
+      desc: result.category === "current_student"
+        ? `Saved${id} as a current student. ${result.reason || ""}`
+        : `Successfully added to AlumniSync${id}. Check the dashboard to view it.`,
     },
     duplicate: {
       icon: "⚠️",
@@ -170,13 +172,10 @@ function extractFromTab(tab, callback) {
             if (!err2 && res2?.success && res2.profile) {
               callback(res2.profile);
             } else {
-              // Extraction failed — return a minimal profile using the tab title
-              // The user can still sync with just the name; the ingestion pipeline
-              // will save it as "Needs Review"
               callback({ full_name: nameFromTabTitle(tab.title), profile_url: tab.url, source: "linkedin-extension" });
             }
           });
-        }, 800);
+        }, 2500);
       }
     );
   });
@@ -218,7 +217,7 @@ async function init() {
     // If extraction only gave us the name (missing details),
     // show a small hint that data may be incomplete
     if (!profile.college && !profile.location && !profile.current_company) {
-      document.getElementById("profile-sub").textContent = "⚠ Scroll down on the profile to load all details, then reopen this popup.";
+      document.getElementById("profile-sub").textContent = "⚠ Could not find details. Try refreshing the LinkedIn page and reopening the popup.";
     }
   });
 }

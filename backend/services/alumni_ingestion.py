@@ -100,11 +100,24 @@ def ingest_alumni(alumni_data: dict, db: Session):
 
     eligibility = check_alumni_eligibility(alumni_data)
 
-    # Definitively not an alumnus (active student, future grad year)
+    # Definitively not an alumnus yet — but still save them as "Current Student"
     if eligibility["status"] == "Current Student":
+        alumni = _save(alumni_data, "Current Student", db)
         return {
-            "status": "excluded",
+            "status": "created",
+            "alumni_id": alumni.id,
             "reason": eligibility.get("reason"),
+            "category": "current_student",
+        }
+
+    # Future graduation year — save as Current Student too
+    if eligibility["status"] == "Invalid" and "future" in eligibility.get("reason", "").lower():
+        alumni = _save(alumni_data, "Current Student", db)
+        return {
+            "status": "created",
+            "alumni_id": alumni.id,
+            "reason": eligibility.get("reason"),
+            "category": "current_student",
         }
 
     if eligibility["status"] == "Invalid":

@@ -31,14 +31,16 @@ def make_db(existing_alumni=None):
 # Eligibility tests (via ingestion pipeline)
 # ---------------------------------------------------------------------------
 
-def test_current_student_is_excluded():
+def test_current_student_is_saved():
     db = make_db()
     result = ingest_alumni({
         "full_name": "Aarav Sharma",
         "currently_studying": True,
         "end_year": 2027
     }, db)
-    assert result["status"] == "excluded"
+    assert result["status"] == "created"
+    assert result.get("category") == "current_student"
+    assert "alumni_id" in result
 
 
 def test_missing_graduation_year_needs_review():
@@ -51,14 +53,16 @@ def test_missing_graduation_year_needs_review():
     assert result["status"] == "needs_review"
 
 
-def test_future_graduation_year_needs_review():
+def test_future_graduation_year_is_saved_as_student():
     db = make_db()
     result = ingest_alumni({
         "full_name": "Future Student",
         "currently_studying": False,
         "end_year": 2099
     }, db)
-    assert result["status"] in ("excluded", "needs_review")
+    assert result["status"] == "created"
+    assert result.get("category") == "current_student"
+    assert "alumni_id" in result
 
 
 # ---------------------------------------------------------------------------
