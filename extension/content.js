@@ -141,11 +141,15 @@
   function parseEducation(lines) {
     if (!lines || lines.length === 0) return null;
 
-    // Filter out noise lines (buttons, links, icons, etc.)
+    // Filter out noise lines (buttons, links, icons, follower counts, etc.)
     const clean = lines.filter((l) =>
       l.length > 1 &&
       l.length < 300 &&
-      !/^(show all|see more|see less|show \d|logo|·)$/i.test(l)
+      !/^(show all|see more|see less|show \d|logo|·)$/i.test(l) &&
+      !/^\d[\d,]+\s*(followers?|connections?|employees?|members?)/i.test(l) &&
+      !/^(followers?|connections?)\s*$/i.test(l) &&
+      !/^\d+\+?\s*(followers?|connections?)/i.test(l) &&
+      !/^(mutual connections?|people also viewed|more profiles)/i.test(l)
     );
 
     if (clean.length === 0) return null;
@@ -202,7 +206,10 @@
     const clean = lines.filter((l) =>
       l.length > 1 &&
       l.length < 300 &&
-      !/^(show all|see more|see less|show \d|logo|·)$/i.test(l)
+      !/^(show all|see more|see less|show \d|logo|·)$/i.test(l) &&
+      !/^\d[\d,]+\s*(followers?|connections?|employees?|members?)/i.test(l) &&
+      !/^(followers?|connections?)\s*$/i.test(l) &&
+      !/^\d+\+?\s*(followers?|connections?)/i.test(l)
     );
 
     if (clean.length === 0) {
