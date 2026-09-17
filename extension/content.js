@@ -209,24 +209,104 @@
       return { current_title: null, current_company: null, past_titles: null, past_companies: null };
     }
 
-    // First experience entry: Title → Company → (type) → Date → (Location)
-    const current_title = clean[0] || null;
+    // Detect if this is a "grouped roles" pattern (multiple roles at same company)
+    // LinkedIn groups them as:
+    //   Line 0: Company Name (e.g. "UPTIQ" or "Bajaj Life")
+    //   Line 1: Total Duration (e.g. "2 yrs 9 mos" or "20 yrs 1 mo")
+    //   Line 2: Location (e.g. "Pune District, Maharashtra, India · On-site")
+    //   Line 3: First Role Title (e.g. "SDE" or "Vice President - ...")
+    //   Line 4: Employment Type / Date range
+    //   ...
+    //
+    // Single role pattern:
+    //   Line 0: Job Title
+    //   Line 1: Company Name
+    //   Line 2: Date range or Employment Type
+    //   Line 3: Location
+
+    // Duration pattern: "X yrs Y mos", "X yr Y mo", "X yrs", "X mos", etc.
+    const isDuration = (s) => /^\d+\s*(yrs?|mos?|years?|months?)(\s+\d+\s*(yrs?|mos?|years?|months?))?$/i.test(s.trim());
+
+    // Check if line 1 is a duration → grouped roles pattern
+    const isGrouped = clean.length >= 3 && isDuration(clean[1]);
+
+    let current_title = null;
     let current_company = null;
     const past_titles = [];
     const past_companies = [];
 
-    // Find company name (first line after title that's not a date or employment type)
-    for (let i = 1; i < Math.min(clean.length, 6); i++) {
-      const t = clean[i];
-      // Skip employment types
-      if (/^(full.time|part.time|contract|freelance|self.employed|internship|seasonal|apprenticeship)/i.test(t)) continue;
-      // Skip date lines
-      if (/\b(19|20)\d{2}\b/.test(t) || /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(t)) break;
-      // Skip location-like lines
-      if (/\b(remote|hybrid|on.?site)\b/i.test(t)) continue;
+    if (isGrouped) {
+      // GROUPED ROLES: Company is line 0, duration is line 1
+      current_company = clean[0];
 
-      current_company = t;
-      break;
+      // Find the first actual role title — skip duration, location, noise
+      for (let i = 2; i < Math.min(clean.length, 10); i++) {
+        const t = clean[i];
+
+        // Skip duration lines
+        if (isDuration(t)) continue;
+        // Skip location lines (contain comma + geographic terms)
+        if (t.includes(",") && /india|district|division|state|city|remote|hybrid|on.?site/i.test(t)) continue;
+        // Skip employment types
+        if (/^(full.time|part.time|contract|freelance|self.employed|internship|seasonal|apprenticeship)/i.test(t)) continue;
+        // Skip date lines
+        if (/\b(19|20)\d{2}\b/.test(t) || /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(t)) continue;
+        // Skip skill/description lines
+        if (/^(\*|•|skills|distributed|architected|specialize|professional|working|taking)/i.test(t)) continue;
+        if (t.startsWith("◇") || t.startsWith("♦")) continue;
+
+        // This should be the actual job title
+        if (!current_title) {
+          current_title = t;
+        } else {
+          // Subsequent role titles at the same company are past titles
+          past_titles.push(t);
+        }
+      }
+
+      // Collect past titles: scan remaining lines for more role titles
+      // After the first role block, look for more roles
+      let foundFirst = false;
+      let roleCount = 0;
+      for (let i = 2; i < clean.length; i++) {
+        const t = clean[i];
+
+        if (isDuration(t)) continue;
+        if (t.includes(",") && /india|district|division|state|city|remote|hybrid|on.?site/i.test(t)) continue;
+        if (/^(full.time|part.time|contract|freelance|self.employed|internship|seasonal|apprenticeship)/i.test(t)) continue;
+        if (/\b(19|20)\d{2}\b/.test(t) || /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(t)) continue;
+        if (/^(\*|•|◇|♦|skills|distributed|architected|specialize|professional|working|taking)/i.test(t)) continue;
+        if (t.length > 200) continue; // descriptions
+
+        roleCount++;
+        if (roleCount === 1) {
+          foundFirst = true; // skip — this is current_title we already captured
+        } else if (roleCount <= 6) {
+          // Only if not already added
+          if (t !== current_title && !past_titles.includes(t)) {
+            past_titles.push(t);
+          }
+        }
+      }
+
+    } else {
+      // SINGLE ROLE: Line 0 = Title, find company in subsequent lines
+      current_title = clean[0];
+
+      for (let i = 1; i < Math.min(clean.length, 6); i++) {
+        const t = clean[i];
+        // Skip employment types
+        if (/^(full.time|part.time|contract|freelance|self.employed|internship|seasonal|apprenticeship)/i.test(t)) continue;
+        // Skip date lines
+        if (/\b(19|20)\d{2}\b/.test(t) || /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(t)) break;
+        // Skip location-like lines
+        if (/\b(remote|hybrid|on.?site)\b/i.test(t)) continue;
+        // Skip duration lines
+        if (isDuration(t)) continue;
+
+        current_company = t;
+        break;
+      }
     }
 
     return {
