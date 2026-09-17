@@ -471,45 +471,47 @@
   async function extractProfileFull() {
     const profile_url = window.location.href.split("?")[0];
 
-    // Step 1: Get name (always available)
+    // Step 1: Get name (always available at top)
     const full_name = extractName();
 
-    // Step 2: Scroll through the page to force all sections to render
+    // Step 2: Get JSON-LD FIRST — this is the most reliable source
+    // LinkedIn always includes structured data with name, college, company, title
+    const jsonLd = extractFromJsonLd();
+
+    // Step 3: Scroll through page to force sections into DOM
     await scrollFullPage();
 
-    // Step 3: Parse the full page text into sections
+    // Step 4: Parse page text for supplemental data (degree, years, past roles)
     const sections = getPageSections();
-
-    // Step 4: Extract from each section
     const edu = parseEducation(sections["education"]);
     const exp = parseExperience(sections["experience"]);
     const location = parseLocation(sections["__top__"], full_name);
 
-    // Step 5: Get JSON-LD as supplemental data
-    const jsonLd = extractFromJsonLd();
-
-    // Build the result — section-specific data takes priority
+    // Build result — JSON-LD is PRIMARY for college/company/title
+    // Text parsing ONLY supplements with degree, field, years, past positions
     const result = {
       full_name: full_name || jsonLd?.full_name || null,
       profile_url,
       source: "linkedin-extension",
 
-      // FROM EDUCATION SECTION ONLY
-      college: edu?.college || jsonLd?.college || null,
+      // COLLEGE: JSON-LD first (always correct), text parsing as fallback
+      college: jsonLd?.college || edu?.college || null,
+
+      // DEGREE/FIELD/YEARS: only from text parsing (not in JSON-LD)
       degree: edu?.degree || null,
       field_of_study: edu?.field_of_study || null,
       start_year: edu?.start_year || null,
       end_year: edu?.end_year || null,
       currently_studying: edu?.currently_studying || false,
 
-      // FROM EXPERIENCE SECTION ONLY
-      current_title: exp?.current_title || jsonLd?.current_title || null,
-      current_company: exp?.current_company || jsonLd?.current_company || null,
+      // TITLE/COMPANY: JSON-LD first, text parsing as fallback
+      current_title: jsonLd?.current_title || exp?.current_title || null,
+      current_company: jsonLd?.current_company || exp?.current_company || null,
       current_industry: null,
       past_titles: exp?.past_titles || null,
       past_companies: exp?.past_companies || null,
 
-      // FROM TOP SECTION ONLY
+      // LOCATION: from top section text only
       location: location || null,
     };
 
@@ -519,24 +521,24 @@
   // Quick non-scroll extraction (for warm-up cache)
   function extractProfileQuick() {
     const full_name = extractName();
+    const jsonLd = extractFromJsonLd();
     const sections = getPageSections();
     const edu = parseEducation(sections["education"]);
     const exp = parseExperience(sections["experience"]);
     const location = parseLocation(sections["__top__"], full_name);
-    const jsonLd = extractFromJsonLd();
 
     return {
       full_name: full_name || jsonLd?.full_name || null,
       profile_url: window.location.href.split("?")[0],
       source: "linkedin-extension",
-      college: edu?.college || jsonLd?.college || null,
+      college: jsonLd?.college || edu?.college || null,
       degree: edu?.degree || null,
       field_of_study: edu?.field_of_study || null,
       start_year: edu?.start_year || null,
       end_year: edu?.end_year || null,
       currently_studying: edu?.currently_studying || false,
-      current_title: exp?.current_title || jsonLd?.current_title || null,
-      current_company: exp?.current_company || jsonLd?.current_company || null,
+      current_title: jsonLd?.current_title || exp?.current_title || null,
+      current_company: jsonLd?.current_company || exp?.current_company || null,
       current_industry: null,
       past_titles: exp?.past_titles || null,
       past_companies: exp?.past_companies || null,
