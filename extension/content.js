@@ -141,31 +141,76 @@
   function parseEducation(lines) {
     if (!lines || lines.length === 0) return null;
 
-    // Filter out noise lines (buttons, links, icons, follower counts, etc.)
-    const clean = lines.filter((l) =>
-      l.length > 1 &&
-      l.length < 300 &&
-      !/^(show all|see more|see less|show \d|logo|·)$/i.test(l) &&
-      !/^\d[\d,]+\s*(followers?|connections?|employees?|members?)/i.test(l) &&
-      !/^(followers?|connections?)\s*$/i.test(l) &&
-      !/^\d+\+?\s*(followers?|connections?)/i.test(l) &&
-      !/^(mutual connections?|people also viewed|more profiles)/i.test(l)
-    );
+    // ---- Aggressive noise filter ----
+    // LinkedIn injects social proof, follower counts, mutual connections,
+    // "alumni work here" etc. inside the Education section text.
+    function isNoise(line) {
+      const l = line.trim();
+      if (l.length <= 1 || l.length >= 300) return true;
 
+      // UI elements
+      if (/^(show all|see more|see less|show \d|logo|·)/i.test(l)) return true;
+
+      // Follower / connection / employee counts
+      if (/\d[\d,]*\s*(followers?|connections?|employees?|members?|people)/i.test(l)) return true;
+      if (/^(followers?|connections?)\s*$/i.test(l)) return true;
+
+      // Social proof: "Rahul & 3 other school alumni work here"
+      if (/\d+\s*other/i.test(l)) return true;
+      if (/alumni\s*(work|from)/i.test(l)) return true;
+      if (/work\s*here/i.test(l)) return true;
+      if (/school\s*alumni/i.test(l)) return true;
+      if (/&\s*\d+\s*other/i.test(l)) return true;
+
+      // Mutual connections / "people also viewed"
+      if (/^(mutual|people also|more profiles|also viewed)/i.test(l)) return true;
+
+      // "Learn more" / "See who" / action prompts
+      if (/^(learn more|see who|visit|view|open to)/i.test(l)) return true;
+
+      return false;
+    }
+
+    const clean = lines.filter((l) => !isNoise(l));
     if (clean.length === 0) return null;
 
-    // The first education entry starts at line 0
-    // Structure: School Name → Degree, Field → Date range → (optional extras)
+    // ---- Find the school name (first valid education line) ----
+    // A valid school name:
+    //   - Is NOT a date line (no standalone year patterns)
+    //   - Is NOT a degree-only line (doesn't start with B.Tech, Bachelor, etc.)
+    //   - Is a multi-word string that looks like an institution name
 
-    const college = clean[0] || null;
+    let college = null;
+    let degreeLineIdx = -1;
+
+    for (let i = 0; i < Math.min(clean.length, 6); i++) {
+      const t = clean[i];
+
+      // Skip date lines
+      if (/\b(19|20)\d{2}\b/.test(t) && t.length < 40) continue;
+
+      // If it looks like a degree line, it's not the school name
+      if (/^(b\.?\s*tech|m\.?\s*tech|bachelor|master|mba|phd|doctor|diploma|associate|certificate|bsc|msc|b\.?\s*e\b|m\.?\s*e\b|b\.?\s*a\b|m\.?\s*a\b|b\.?\s*com|m\.?\s*com|b\.?\s*sc|m\.?\s*sc)/i.test(t)) {
+        if (degreeLineIdx === -1) degreeLineIdx = i;
+        continue;
+      }
+
+      // This looks like the school name
+      college = t;
+      degreeLineIdx = i + 1; // degree starts after school name
+      break;
+    }
+
+    if (!college) return null;
+
     let degree = null;
     let field_of_study = null;
     let start_year = null;
     let end_year = null;
     let currently_studying = false;
-    let dateFound = false;
 
-    for (let i = 1; i < Math.min(clean.length, 8); i++) {
+    const searchFrom = degreeLineIdx >= 0 ? degreeLineIdx : 1;
+    for (let i = searchFrom; i < Math.min(clean.length, searchFrom + 6); i++) {
       const t = clean[i];
 
       // Skip noise
@@ -177,14 +222,11 @@
         start_year = yrs[0] || null;
         end_year = yrs[1] || null;
         currently_studying = /present|current/i.test(t) && !end_year;
-        dateFound = true;
-        break; // Stop after date — rest is description
+        break;
       }
 
-      // If another school name appears (next education entry), stop
-      // Heuristic: if this line is longer than 15 chars, has no comma, and no digits — might be next school
-      // But first non-date line is likely degree/field
-      if (!degree) {
+      // First non-date line = degree/field
+      if (!degree && t.length < 200) {
         const parts = t.split(",").map((p) => p.trim());
         degree = parts[0] || null;
         field_of_study = parts.slice(1).join(", ") || null;
