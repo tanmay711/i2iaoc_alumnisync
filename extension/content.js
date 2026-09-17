@@ -465,7 +465,96 @@
   }
 
   // =========================================================================
-  // MAIN EXTRACTION — scroll + parse text
+  // DOM EXTRACTORS — target specific reliable elements (logged-in views)
+  // These are ALWAYS in the DOM (never virtualized) because they're in the
+  // intro/top card section.
+  // =========================================================================
+
+  /** Extract college from the school link/card in the profile intro section */
+  function extractCollegeFromDom() {
+    // LinkedIn shows school name as a clickable link in the top card
+    // It links to /school/XXXXX/ — look for these anchor tags
+    const schoolLinks = document.querySelectorAll('a[href*="/school/"]');
+    for (const link of schoolLinks) {
+      const text = link.innerText.trim();
+      // Must be a reasonable school name (not empty, not a button, not too long)
+      if (text.length > 2 && text.length < 150 && !/follow|connect|show|see/i.test(text)) {
+        return text;
+      }
+    }
+
+    // Some schools are listed as /company/ pages instead of /school/
+    // Check company links in the top section only (not experience section)
+    const topCard = document.querySelector('.pv-top-card') ||
+                    document.querySelector('main > section') ||
+                    document.querySelector('main');
+    if (topCard) {
+      // Look for company links that appear alongside a school icon/image
+      const companyLinks = topCard.querySelectorAll('a[href*="/company/"]');
+      for (const link of companyLinks) {
+        const text = link.innerText.trim();
+        if (text.length > 2 && text.length < 150 &&
+            !/follow|connect|show|see|message/i.test(text) &&
+            /university|institute|college|school|academy|iit|nit|bits|vit|mit|srm/i.test(text)) {
+          return text;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /** Extract current company from company link in the profile intro section */
+  function extractCompanyFromDom() {
+    // LinkedIn shows current company as a clickable link in the top card / experience
+    // Look for company links, but skip school-like ones
+    const topCard = document.querySelector('.pv-top-card') ||
+                    document.querySelector('main > section') ||
+                    document.querySelector('main');
+    if (!topCard) return null;
+
+    const companyLinks = topCard.querySelectorAll('a[href*="/company/"]');
+    for (const link of companyLinks) {
+      const text = link.innerText.trim();
+      if (text.length > 1 && text.length < 150 &&
+          !/follow|connect|show|see|message/i.test(text) &&
+          !/university|institute|college|school|academy/i.test(text)) {
+        return text;
+      }
+    }
+
+    return null;
+  }
+
+  /** Extract headline text (contains useful structured info) */
+  function extractHeadline() {
+    // Headline is the text right below the name in the intro card
+    // It's usually in a div with class containing "text-body-medium"
+    // But class names are unreliable, so look for text near h1
+    const h1 = document.querySelector("h1");
+    if (!h1) return null;
+
+    // Walk siblings and nearby elements to find the headline
+    let node = h1.parentElement;
+    if (!node) return null;
+
+    // The headline is typically in the next sibling or a nearby div
+    const candidates = node.parentElement?.querySelectorAll("div") || [];
+    for (const div of candidates) {
+      const text = div.innerText.trim();
+      // Headline is typically 20-200 chars, contains job-related info
+      if (text.length > 15 && text.length < 250 &&
+          text !== h1.innerText.trim() &&
+          !text.includes("\n") &&
+          !/follow|connect|message|contact info|connections/i.test(text)) {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  // =========================================================================
+  // MAIN EXTRACTION — DOM first, then JSON-LD, then text parsing
   // =========================================================================
 
   async function extractProfileFull() {
@@ -474,39 +563,41 @@
     // Step 1: Get name (always available at top)
     const full_name = extractName();
 
-    // Step 2: Get JSON-LD FIRST — this is the most reliable source
-    // LinkedIn always includes structured data with name, college, company, title
+    // Step 2: DOM extraction — most reliable on logged-in views
+    const domCollege = extractCollegeFromDom();
+    const domCompany = extractCompanyFromDom();
+
+    // Step 3: JSON-LD — most reliable on public/logged-out views
     const jsonLd = extractFromJsonLd();
 
-    // Step 3: Scroll through page to force sections into DOM
+    // Step 4: Scroll through page to force sections into DOM
     await scrollFullPage();
 
-    // Step 4: Parse page text for supplemental data (degree, years, past roles)
+    // Step 5: Parse page text for supplemental data (degree, years, past roles)
     const sections = getPageSections();
     const edu = parseEducation(sections["education"]);
     const exp = parseExperience(sections["experience"]);
     const location = parseLocation(sections["__top__"], full_name);
 
-    // Build result — JSON-LD is PRIMARY for college/company/title
-    // Text parsing ONLY supplements with degree, field, years, past positions
+    // Build result — priority: DOM > JSON-LD > text parsing
     const result = {
       full_name: full_name || jsonLd?.full_name || null,
       profile_url,
       source: "linkedin-extension",
 
-      // COLLEGE: JSON-LD first (always correct), text parsing as fallback
-      college: jsonLd?.college || edu?.college || null,
+      // COLLEGE: DOM link first (always correct), then JSON-LD, then text
+      college: domCollege || jsonLd?.college || edu?.college || null,
 
-      // DEGREE/FIELD/YEARS: only from text parsing (not in JSON-LD)
+      // DEGREE/FIELD/YEARS: only from text parsing (not in DOM links or JSON-LD)
       degree: edu?.degree || null,
       field_of_study: edu?.field_of_study || null,
       start_year: edu?.start_year || null,
       end_year: edu?.end_year || null,
       currently_studying: edu?.currently_studying || false,
 
-      // TITLE/COMPANY: JSON-LD first, text parsing as fallback
+      // TITLE/COMPANY: DOM/JSON-LD first, text parsing as fallback
       current_title: jsonLd?.current_title || exp?.current_title || null,
-      current_company: jsonLd?.current_company || exp?.current_company || null,
+      current_company: domCompany || jsonLd?.current_company || exp?.current_company || null,
       current_industry: null,
       past_titles: exp?.past_titles || null,
       past_companies: exp?.past_companies || null,
@@ -521,6 +612,8 @@
   // Quick non-scroll extraction (for warm-up cache)
   function extractProfileQuick() {
     const full_name = extractName();
+    const domCollege = extractCollegeFromDom();
+    const domCompany = extractCompanyFromDom();
     const jsonLd = extractFromJsonLd();
     const sections = getPageSections();
     const edu = parseEducation(sections["education"]);
@@ -531,14 +624,14 @@
       full_name: full_name || jsonLd?.full_name || null,
       profile_url: window.location.href.split("?")[0],
       source: "linkedin-extension",
-      college: jsonLd?.college || edu?.college || null,
+      college: domCollege || jsonLd?.college || edu?.college || null,
       degree: edu?.degree || null,
       field_of_study: edu?.field_of_study || null,
       start_year: edu?.start_year || null,
       end_year: edu?.end_year || null,
       currently_studying: edu?.currently_studying || false,
       current_title: jsonLd?.current_title || exp?.current_title || null,
-      current_company: jsonLd?.current_company || exp?.current_company || null,
+      current_company: domCompany || jsonLd?.current_company || exp?.current_company || null,
       current_industry: null,
       past_titles: exp?.past_titles || null,
       past_companies: exp?.past_companies || null,
